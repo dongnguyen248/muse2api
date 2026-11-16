@@ -296,8 +296,10 @@ curl http://localhost:18610/admin/accounts \
 > never contain `tool_calls`. The same applies to sampling parameters
 > (`temperature`, `top_p`, `max_tokens`). System and developer messages are
 > forwarded inside a `<system_instructions>` block at the start of the prompt
-> on a best-effort basis: the muse chat has no native system role, so whether
-> the upstream model treats the block as binding instructions is up to it.
+> and repeated at the end of it, on a best-effort basis: the muse chat has
+> no native system role and the upstream agent weights the tail of the
+> message most, so the instruction is made the last thing it reads. Whether
+> it treats the block as binding instructions is still up to it.
 
 ### Dashboard, API keys and request log
 
