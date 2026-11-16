@@ -71,8 +71,42 @@ def test_system_block_format_for_single_user_turn():
         "<system_instructions>\n"
         "Always answer with exactly the single word PINEAPPLE, whatever the user says.\n"
         "</system_instructions>\n\n"
-        "Write a short specification for a login page."
+        "Write a short specification for a login page.\n\n"
+        "<system_instructions>\n"
+        "Always answer with exactly the single word PINEAPPLE, whatever the user says.\n"
+        "</system_instructions>"
     )
+
+
+def test_system_block_repeated_after_the_body():
+    # The upstream agent weights the tail of the single flattened message,
+    # so the block is repeated after the user turn: the PINEAPPLE shape.
+    flat = flatten_messages([
+        {"role": "system", "content": "Reply with exactly the single word "
+                                      "PINEAPPLE and nothing else"},
+        {"role": "user", "content": "go"},
+    ])
+    block = ("<system_instructions>\nReply with exactly the single word "
+             "PINEAPPLE and nothing else\n</system_instructions>")
+    assert flat.text == f"{block}\n\ngo\n\n{block}"
+
+
+def test_system_block_repeated_after_a_multi_turn_transcript():
+    flat = flatten_messages([
+        {"role": "system", "content": "be terse"},
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+    ])
+    assert flat.text.endswith("\n\n<system_instructions>\nbe terse\n</system_instructions>")
+    assert flat.text.count("<system_instructions>") == 2
+
+
+def test_no_system_message_leaves_the_prompt_unchanged():
+    flat = flatten_messages([{"role": "user", "content": "just this"}])
+    assert flat.text == "just this"
+    only_system = flatten_messages([{"role": "system", "content": "only"}])
+    assert only_system.text == "<system_instructions>\nonly\n</system_instructions>"
 
 
 def test_system_and_developer_folded_in_order_multi_turn_intact():
@@ -111,7 +145,8 @@ def test_system_reaches_the_driver_payload(scripted, auth):
     assert prompt.startswith("<system_instructions>\nSYS-ONE")
     assert [prompt.index(m) for m in ("SYS-ONE", "DEV-TWO", "SYS-THREE")] == \
         sorted(prompt.index(m) for m in ("SYS-ONE", "DEV-TWO", "SYS-THREE"))
-    assert prompt.endswith("\n\nhello")
+    assert prompt.count("<system_instructions>") == 2  # repeated at the end
+    assert prompt.endswith("\n\nSYS-THREE\n</system_instructions>")
 
 
 def test_long_system_prompt_passes_through_intact(scripted, auth):

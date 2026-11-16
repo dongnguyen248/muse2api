@@ -94,8 +94,8 @@ def flatten_messages(messages: list[dict[str, Any]]) -> FlatPrompt:
         return FlatPrompt(text="", images=images)
 
     # The muse web chat has no system role, so system/developer messages are
-    # folded, in order, into a delimited block that leads the prompt; buried
-    # mid-transcript as "[System]" turns they were ignored by the model.
+    # folded, in order, into a delimited block; buried mid-transcript as
+    # "[System]" turns they were ignored by the model.
     system = [text for role, text in turns if role in ("system", "developer")]
     rest = [(role, text) for role, text in turns if role not in ("system", "developer")]
     instructions = ""
@@ -108,8 +108,7 @@ def flatten_messages(messages: list[dict[str, Any]]) -> FlatPrompt:
     # A lone user turn is sent verbatim; anything richer gets role headers.
     if len(rest) == 1 and rest[0][0] == "user":
         body = rest[0][1]
-        return FlatPrompt(text=f"{instructions}\n\n{body}" if instructions else body,
-                          images=images)
+        return FlatPrompt(text=_with_instructions(instructions, body), images=images)
 
     blocks = [f"[{ROLE_LABELS.get(role, role.title())}]\n{text}" for role, text in rest]
     blocks.append(
@@ -117,4 +116,18 @@ def flatten_messages(messages: list[dict[str, Any]]) -> FlatPrompt:
         "User message. Output only the reply."
     )
     body = "\n\n".join(blocks)
-    return FlatPrompt(text=f"{instructions}\n\n{body}" if instructions else body, images=images)
+    return FlatPrompt(text=_with_instructions(instructions, body), images=images)
+
+
+def _with_instructions(instructions: str, body: str) -> str:
+    """Wrap ``body`` with the system block at BOTH ends.
+
+    The flattened prompt is a single user message to an agent that weights
+    its tail most (live evidence: it answered the final "go" and ignored a
+    leading instruction block). Repeating the block after the body makes
+    the instruction the last thing the model reads, at the cost of sending
+    it twice. Without system messages the body is returned unchanged.
+    """
+    if not instructions:
+        return body
+    return f"{instructions}\n\n{body}\n\n{instructions}"
