@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     keepalive_enabled: bool = True
     keepalive_interval: float = 600
 
+    @field_validator("data_dir", mode="after")
+    @classmethod
+    def _absolute_data_dir(cls, value: Path) -> Path:
+        """Resolve the data dir once, at load: every derived path (profile,
+        media, keys) is then absolute and immune to later cwd changes — a
+        relative --user-data-dir makes Chrome 157 exit with code 21."""
+        return value.resolve()
+
     @field_validator("browser_profile_dir", mode="before")
     @classmethod
     def _blank_profile_dir_is_unset(cls, value: object) -> object:
@@ -134,7 +142,12 @@ class Settings(BaseSettings):
 
     @property
     def profile_dir(self) -> Path:
-        return self.browser_profile_dir or (self.data_dir / "browser-profile")
+        if self.browser_profile_dir is None:
+            return self.data_dir / "browser-profile"
+        if self.browser_profile_dir.is_absolute():
+            return self.browser_profile_dir
+        # A relative override anchors on the (absolute) data dir, not the cwd.
+        return self.data_dir / self.browser_profile_dir
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.media_dir):

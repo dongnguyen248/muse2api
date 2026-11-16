@@ -5,15 +5,17 @@ lists, no real browser."""
 import os
 import socket
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
+from muse2api.config import Settings
 from muse2api.drivers.browser import chromium
 from muse2api.drivers.browser.chromium import (
     ChromiumProcess,
     ProcessInfo,
     ProcessScan,
     _manual_holder_steps,
+    absolute_profile_dir,
     devtools_active_port,
     is_chrome_process,
     parse_process_lines,
@@ -231,6 +233,57 @@ def test_manual_holder_steps_windows_text(tmp_path):
     assert "Get-CimInstance Win32_Process" in steps
     assert "*browser-profile*" in steps
     assert "Resource Monitor" in steps and "Associated Handles" in steps
+
+
+def _user_data_dir_arg(proc: ChromiumProcess) -> str:
+    return next(a for a in proc._command_args() if a.startswith("--user-data-dir="))
+
+
+def test_command_args_use_an_absolute_user_data_dir_with_a_relative_data_dir(
+        tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    proc = ChromiumProcess("chrome", 9222, Path("data/browser-profile"),
+                           data_dir=Path("data"))
+    expected = tmp_path / "data" / "browser-profile"
+    assert proc.profile_dir == expected
+    assert _user_data_dir_arg(proc) == f"--user-data-dir={expected}"
+    assert proc.output_log == tmp_path / "data" / "chromium-output.log"
+
+
+def test_command_args_windows_style_paths():
+    proc = ChromiumProcess(
+        "chrome.exe", 9222, PureWindowsPath("data/browser-profile"),
+        data_dir=PureWindowsPath("C:/muse2api/data"))
+    assert _user_data_dir_arg(proc) == (
+        "--user-data-dir=C:\\muse2api\\data\\browser-profile")
+
+
+def test_absolute_profile_dir_is_unchanged(tmp_path):
+    profile = tmp_path / "data" / "browser-profile"
+    assert absolute_profile_dir(profile, tmp_path / "data") == profile
+    proc = ChromiumProcess("chrome", 9222, profile, data_dir=tmp_path / "data")
+    assert proc.profile_dir == profile
+    assert _user_data_dir_arg(proc) == f"--user-data-dir={profile}"
+
+
+def test_settings_resolve_a_relative_data_dir_at_load(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    settings = Settings(_env_file=None, data_dir=Path("data"))
+    assert settings.data_dir == tmp_path / "data"
+    assert settings.data_dir.is_absolute()
+    assert settings.profile_dir == tmp_path / "data" / "browser-profile"
+
+
+def test_settings_anchor_a_relative_profile_override_on_the_data_dir(tmp_path):
+    settings = Settings(_env_file=None, data_dir=tmp_path,
+                        browser_profile_dir=Path("profiles/x"))
+    assert settings.profile_dir == tmp_path / "profiles" / "x"
+
+
+def test_settings_keep_an_absolute_data_dir_unchanged(tmp_path):
+    settings = Settings(_env_file=None, data_dir=tmp_path / "data")
+    assert settings.data_dir == tmp_path / "data"
+    assert settings.profile_dir == tmp_path / "data" / "browser-profile"
 
 
 def test_tail_lines_returns_only_the_last_lines(tmp_path):

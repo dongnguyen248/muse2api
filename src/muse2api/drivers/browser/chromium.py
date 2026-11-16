@@ -68,6 +68,27 @@ def _norm_variants(raw: str) -> set[str]:
     return variants
 
 
+def absolute_profile_dir(profile_dir: Path, data_dir: Path | None) -> Path:
+    """Absolute form of the profile dir, for the Chrome command line.
+
+    Chrome 157 exits with code 21 (RESULT_CODE_PROFILE_IN_USE) for a
+    RELATIVE --user-data-dir, even on a brand-new profile, so the path must
+    be absolute before launch. Relative paths anchor on the resolved data
+    dir — a leading component equal to the data dir's name is that anchor
+    prefix, not a literal folder — never on the process cwd. An already
+    absolute path is returned unchanged.
+    """
+    if profile_dir.is_absolute():
+        return profile_dir
+    if data_dir is None:
+        return profile_dir.resolve()
+    anchor = data_dir.resolve() if isinstance(data_dir, Path) else data_dir
+    parts = profile_dir.parts
+    if parts and parts[0] == data_dir.name:
+        parts = parts[1:]
+    return anchor.joinpath(*parts) if parts else anchor
+
+
 def is_chrome_process(proc: ProcessInfo) -> bool:
     cmdline = proc.command_line.lower()
     tokens = cmdline.split()
@@ -282,11 +303,11 @@ class ChromiumProcess:
                  proxy: str = "", data_dir: Path | None = None):
         self.executable = executable
         self.port = port
-        self.profile_dir = profile_dir
+        self.profile_dir = absolute_profile_dir(profile_dir, data_dir)
         self.headless = headless
         self.proxy = proxy
         self.data_dir = data_dir
-        self.output_log = profile_dir.parent / "chromium-output.log"
+        self.output_log = self.profile_dir.parent / "chromium-output.log"
         self.proc: asyncio.subprocess.Process | None = None
         self._log_handle: TextIO | None = None
         self._scan: ProcessScan | None = None
@@ -304,6 +325,29 @@ class ChromiumProcess:
                 return r.json().get("webSocketDebuggerUrl")
         except (httpx.HTTPError, ValueError):
             return None
+
+    def _command_args(self) -> list[str]:
+        """The Chrome command line; --user-data-dir is always absolute."""
+        args = [
+            self.executable,
+            f"--remote-debugging-port={self.port}",
+            "--remote-allow-origins=*",
+            f"--user-data-dir={self.profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-dev-shm-usage",
+            "--disable-background-networking",
+            "--autoplay-policy=no-user-gesture-required",
+            "--window-size=1440,2200",
+            "about:blank",
+        ]
+        if self.proxy:
+            args.insert(1, f"--proxy-server={self.proxy}")
+        if self.headless:
+            args[1:1] = ["--headless=new", "--disable-gpu"]
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            args.insert(1, "--no-sandbox")
+        return args
 
     async def start(self) -> str:
         """Start (or attach to an already running) Chromium; return the browser ws URL."""
@@ -352,26 +396,7 @@ class ChromiumProcess:
             with contextlib.suppress(FileNotFoundError):
                 (self.profile_dir / lock).unlink()
 
-        args = [
-            self.executable,
-            f"--remote-debugging-port={self.port}",
-            "--remote-allow-origins=*",
-            f"--user-data-dir={self.profile_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-dev-shm-usage",
-            "--disable-background-networking",
-            "--autoplay-policy=no-user-gesture-required",
-            "--window-size=1440,2200",
-            "about:blank",
-        ]
-        if self.proxy:
-            args.insert(1, f"--proxy-server={self.proxy}")
-        if self.headless:
-            args[1:1] = ["--headless=new", "--disable-gpu"]
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            args.insert(1, "--no-sandbox")
-
+        args = self._command_args()
         log.info("launching Chromium: %s", subprocess.list2cmdline(args))
         self._log_handle = await asyncio.to_thread(
             self.output_log.open, "a", encoding="utf-8")
